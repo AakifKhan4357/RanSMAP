@@ -74,7 +74,16 @@ def plot_metric_comparison(results_file):
 
     plt.figure(figsize=(9, 5))
 
-    plt.bar(metric_names, values)
+    bars = plt.bar(metric_names, values)
+
+for bar in bars:
+    height = bar.get_height() 
+    plt.text(
+        bar.get_x() + bar.get_width() / 2,
+        height + 0.02,
+        f"{height:.2f}",
+        ha="center"
+    )
 
     plt.title("Ransomware Detection - Evaluation Metrics")
     plt.ylabel("Score")
