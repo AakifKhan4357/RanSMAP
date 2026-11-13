@@ -1,0 +1,63 @@
+
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RanSMAP Execution Prediction",
+  "description": "One CNN-LSTM prediction record per execution.",
+  "type": "object",
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual_label": {
+      "type": ["string", "null"],
+      "enum": ["Benign", "Ransomware", null]
+    },
+    "predicted_label": {
+      "type": "string",
+      "enum": ["Benign", "Ransomware"]
+    },
+    "benign_probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "ransomware_probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "experiment_name": {
+      "type": ["string", "null"],
+      "enum": [
+        "static_baseline",
+        "naive_finetuning",
+        "replay_adaptation",
+        null
+      ]
+    },
+    "adaptation_stage": {
+      "type": ["string", "null"],
+      "enum": ["before_adaptation", "after_adaptation", null]
+    },
+    "category": {
+      "type": ["string", "null"]
+    },
+    "hardware_config": {
+      "type": ["string", "null"]
+    }
+  },
+  "required": [
+    "execution_id",
+    "predicted_label",
+    "benign_probability",
+    "ransomware_probability",
+    "confidence"
+  ],
+  "additionalProperties": false
+}
