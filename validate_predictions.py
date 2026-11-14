@@ -7,11 +7,7 @@ from evaluation import load_predictions, normalize_label
 
 BENIGN = "Benign"
 RANSOMWARE = "Ransomware"
-
-REQUIRED_COLUMNS = [
-    "execution_id",
-    "predicted_label",
-]
+TOLERANCE = 1e-6
 
 PROBABILITY_COLUMNS = [
     "benign_probability",
@@ -26,46 +22,35 @@ OPTIONAL_METADATA = [
 ]
 
 
-def validate_predictions(file_path, offline=True, check_argmax=False):
-    """
-    Validate prediction records before model evaluation.
-
-    Parameters:
-        file_path: CSV or JSON prediction file.
-        offline: Whether ground-truth labels are required.
-        check_argmax: Whether predicted labels must match
-                      the highest class probability.
-
-    Returns:
-        Validated pandas DataFrame.
-    """
+def validate_predictions(file_path, offline=True, check_argmax=True):
+    """Validate predictions using the current argmax baseline contract."""
 
     df = load_predictions(file_path)
 
     if df.empty:
         raise ValueError("Prediction file is empty.")
 
-    # Check required columns.
-    required = REQUIRED_COLUMNS.copy()
+    required_columns = [
+        "execution_id",
+        "predicted_label",
+    ]
 
     if offline:
-        required.append("actual_label")
+        required_columns.append("actual_label")
 
     missing = [
-        column for column in required
-        if column not in df.columns
+        col for col in required_columns
+        if col not in df.columns
     ]
 
     if missing:
-        raise ValueError(
-            f"Missing required columns: {missing}"
-        )
-
-    # Validate execution IDs.
-    if df["execution_id"].isna().any():
-        raise ValueError("Missing execution ID.")
+        raise ValueError(f"Missing required columns: {missing}")
 
     df = df.copy()
+
+    # Execution ID checks
+    if df["execution_id"].isna().any():
+        raise ValueError("Missing execution ID.")
 
     df["execution_id"] = (
         df["execution_id"].astype(str).str.strip()
@@ -77,104 +62,102 @@ def validate_predictions(file_path, offline=True, check_argmax=False):
     if df["execution_id"].duplicated().any():
         raise ValueError("Duplicate execution IDs detected.")
 
-    # Validate predicted labels.
+    # Label checks
     df["predicted_label"] = df["predicted_label"].apply(
         normalize_label
     )
 
-    # Ground-truth labels are mandatory for offline evaluation.
     if offline:
         if df["actual_label"].isna().any():
-            raise ValueError(
-                "Actual labels are required for offline evaluation."
-            )
+            raise ValueError("Missing actual labels.")
 
         df["actual_label"] = df["actual_label"].apply(
             normalize_label
         )
 
-    # Both probability columns must exist together.
+    # Both probability columns must be supplied together.
     present = [
-        column for column in PROBABILITY_COLUMNS
-        if column in df.columns
+        col for col in PROBABILITY_COLUMNS
+        if col in df.columns
     ]
 
-    if len(present) == 1:
+    if len(present) != 2:
         raise ValueError(
-            "Both benign_probability and "
-            "ransomware_probability must be provided together."
+            "Both probability columns are required "
+            "for the current argmax baseline."
         )
 
-    # Validate probabilities.
-    if len(present) == 2:
+    probabilities = df[PROBABILITY_COLUMNS].apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
 
-        probabilities = df[PROBABILITY_COLUMNS].apply(
-            pd.to_numeric,
-            errors="coerce"
+    if probabilities.isna().any().any():
+        raise ValueError("Invalid probability values.")
+
+    if (
+        (probabilities < 0).any().any()
+        or (probabilities > 1).any().any()
+    ):
+        raise ValueError("Probabilities must be between 0 and 1.")
+
+    benign = probabilities["benign_probability"]
+    ransomware = probabilities["ransomware_probability"]
+
+    # Probability sum check
+    if not (
+        (benign + ransomware - 1.0).abs() <= TOLERANCE
+    ).all():
+        raise ValueError(
+            "Class probabilities must sum to approximately 1.0."
         )
 
-        if probabilities.isna().any().any():
-            raise ValueError(
-                "Missing or invalid probability values."
-            )
+    # Confidence must match the maximum probability.
+    if "confidence" not in df.columns:
+        raise ValueError("Missing confidence column.")
 
-        if (
-            (probabilities < 0).any().any()
-            or (probabilities > 1).any().any()
-        ):
-            raise ValueError(
-                "Probabilities must be between 0 and 1."
-            )
+    confidence = pd.to_numeric(
+        df["confidence"],
+        errors="coerce"
+    )
 
-        probability_sums = probabilities.sum(axis=1)
+    if confidence.isna().any():
+        raise ValueError("Invalid confidence values.")
 
-        if not (
-            (probability_sums - 1).abs() <= 0.01
-        ).all():
-            raise ValueError(
-                "Class probabilities must sum approximately to 1."
-            )
+    if (
+        (confidence < 0).any()
+        or (confidence > 1).any()
+    ):
+        raise ValueError("Confidence must be between 0 and 1.")
 
-        # Optional baseline argmax consistency check.
-        if check_argmax:
+    expected_confidence = probabilities.max(axis=1)
 
-            expected = probabilities.idxmax(axis=1).map({
-                "benign_probability": BENIGN,
-                "ransomware_probability": RANSOMWARE,
-            })
-
-            if not (
-                expected.values == df["predicted_label"].values
-            ).all():
-                raise ValueError(
-                    "Predicted labels do not match probability argmax."
-                )
-
-    # Validate confidence if supplied.
-    if "confidence" in df.columns:
-
-        confidence = pd.to_numeric(
-            df["confidence"],
-            errors="coerce"
+    if not (
+        (confidence - expected_confidence).abs() <= TOLERANCE
+    ).all():
+        raise ValueError(
+            "Confidence must equal the maximum class probability."
         )
 
-        if confidence.isna().any():
-            raise ValueError("Invalid confidence values.")
+    # Current baseline uses argmax.
+    if check_argmax:
+        expected_labels = [
+            BENIGN if b >= r else RANSOMWARE
+            for b, r in zip(benign, ransomware)
+        ]
 
-        if (
-            (confidence < 0).any()
-            or (confidence > 1).any()
-        ):
+        if expected_labels != df["predicted_label"].tolist():
             raise ValueError(
-                "Confidence must be between 0 and 1."
+                "Predicted labels do not match argmax probabilities."
             )
 
-    # Display validation summary.
     print("\n===== PREDICTION VALIDATION PASSED =====")
     print(f"Prediction records: {len(df)}")
     print(f"Unique executions: {df['execution_id'].nunique()}")
     print(f"Offline evaluation: {offline}")
-    print(f"Probabilities available: {len(present) == 2}")
+    print("Probability sum check: passed")
+    print("Confidence consistency check: passed")
+    print(f"Argmax consistency check: {check_argmax}")
 
     for column in OPTIONAL_METADATA:
         if column in df.columns:
@@ -187,20 +170,12 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print(
-            "Usage: python3 validate_predictions.py "
-            "predictions.csv [--check-argmax]"
+            "Usage: python3 validate_predictions.py predictions.csv"
         )
         sys.exit(1)
 
-    input_file = sys.argv[1]
-    check_argmax = "--check-argmax" in sys.argv[2:]
-
     try:
-        validate_predictions(
-            input_file,
-            offline=True,
-            check_argmax=check_argmax
-        )
+        validate_predictions(sys.argv[1])
 
     except (ValueError, FileNotFoundError) as error:
         print(f"\nVALIDATION FAILED: {error}")
