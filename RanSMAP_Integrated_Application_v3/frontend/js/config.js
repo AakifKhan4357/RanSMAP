@@ -1,0 +1,1 @@
+export const CONFIG={API_BASE_URL:"http://127.0.0.1:8000",DEV_MOCKS:false,TIMEOUT:120000};export const STREAMS=["ata_read","ata_write","mem_read","mem_write","mem_readwrite","mem_exec"];
